@@ -3,6 +3,7 @@ package main
 import (
 	"bookshelf/database"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
@@ -15,6 +16,10 @@ func main() {
 	r := gin.Default()
 	r.SetTrustedProxies([]string{HOST})
 	database.ConnectDB()
+
+	r.Use(cors.New(cors.Config{
+		AllowOrigins: []string{"*"},
+	}))
 
 	r.POST("/signup", createUser)
 	r.GET("/myself", getUserInfo)

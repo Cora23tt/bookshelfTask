@@ -16,6 +16,7 @@ import (
 	"bookshelf/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lib/pq"
 )
 
 func createUser(c *gin.Context) {
@@ -23,11 +24,25 @@ func createUser(c *gin.Context) {
 	err := c.BindJSON(&user)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if user.Email == "" || user.Name == "" || user.Key == "" || user.Secret == "" {
+		c.JSON(http.StatusBadRequest, err.Error())
+		return
 	}
 
 	newuser, err := database.CreateUser(user)
 	if err != nil {
+		if pqErr, ok := err.(*pq.Error); ok {
+			switch pqErr.Code.Name() {
+			case "unique_violation":
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Unnable create new user. ERROR: " + err.Error()})
+				return
+			}
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unnable create new user. ERROR: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": newuser, "isOk": true, "message": "ok"})
@@ -55,8 +70,7 @@ func searchBooks(c *gin.Context) {
 		return
 	}
 
-	title := c.Param("title")
-	books, err := database.SearchBooksByTitle(title)
+	books, err := database.SearchBooksByTitle(c.GetHeader("Key"), c.Param("title"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unnable search book. ERROR: " + err.Error()})
 		return
@@ -67,16 +81,19 @@ func searchBooks(c *gin.Context) {
 
 func createBook(c *gin.Context) {
 
+	// getting request body
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	// checking sing
 	if !CompareSign(c, string(body)) {
 		return
 	}
 
+	// getting book isbn from reqBody
 	var isbn models.ISBN
 	if err = json.Unmarshal(body, &isbn); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -86,15 +103,10 @@ func createBook(c *gin.Context) {
 	// getting book data from openlibrary by isbn ======================
 	book := GetBookOpenLib(isbn)
 
-	user, err := database.GetUserByKey(c.GetHeader("Key"))
+	// creating book
+	Book, err := database.CreateBook(book, c.GetHeader("Key"))
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"data": "the sign is invalid", "isOk": true, "message": "unable to authorize"})
-		return
-	}
-
-	Book, err := database.CreateBook(book, user.ID)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, err.Error())
+		c.JSON(http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -116,13 +128,7 @@ func getAllBooks(c *gin.Context) {
 		return
 	}
 
-	user, err := database.GetUserByKey(c.GetHeader("Key"))
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"data": "the sign is invalid", "isOk": true, "message": "unable to authorize"})
-		return
-	}
-
-	books, err := database.GetAllBooks(user.ID)
+	books, err := database.GetAllBooks(c.GetHeader("Key"))
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -154,16 +160,10 @@ func editBook(c *gin.Context) {
 		return
 	}
 
-	// Edit status
-	user, err := database.GetUserByKey(c.GetHeader("Key"))
+	// Edit book status
+	book, err := database.EditStatus(c.GetHeader("Key"), book_id, Status.Status)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"data": "the sign is invalid", "isOk": true, "message": "unable to authorize"})
-		return
-	}
-
-	book, err := database.EditStatus(user.ID, book_id, Status.Status)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"data": "the sign is invalid", "isOk": true, "message": "unable to authorize"})
+		c.JSON(500, gin.H{"error": err.Error(), "isOk": true, "message": "unable to edit"})
 		return
 	}
 	c.JSON(http.StatusOK, models.BookResponse{Data: models.BookStatus{Book: book, Status: Status.Status}, IsOK: true, Message: "ok"})
@@ -188,18 +188,18 @@ func deleteBook(c *gin.Context) {
 	s := c.Param("id")
 	book_id, err := strconv.Atoi(s)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"data": "the sign is invalid", "isOk": true, "message": "unable to authorize"})
+		c.JSON(500, gin.H{"error": err.Error(), "isOk": true, "message": "unable to authorize"})
 		return
 	}
+
+	// user, err := database.GetUserByKey(c.GetHeader("Key"))
+	// if err != nil {
+	// 	c.JSON(http.StatusUnauthorized, gin.H{"data": "the sign is invalid", "isOk": true, "message": "unable to authorize"})
+	// 	return
+	// }
 
 	// Delete book
-	user, err := database.GetUserByKey(c.GetHeader("Key"))
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"data": "the sign is invalid", "isOk": true, "message": "unable to authorize"})
-		return
-	}
-
-	books, err := database.DeleteBook(user.ID, book_id)
+	books, err := database.DeleteBook(c.GetHeader("Key"), book_id)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"data": "the sign is invalid", "isOk": true, "message": "unable to authorize"})
 		return
